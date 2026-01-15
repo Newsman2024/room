@@ -1,7 +1,8 @@
 <?php 
 session_start();  // ← This line was missing before — now added
+include 'db.php';
 include 'header.php'; 
-include 'db.php'; 
+ 
 ?>
 
 <header class="bg-green-700 text-white p-8 text-center">
