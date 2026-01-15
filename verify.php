@@ -1,4 +1,9 @@
-<?php include 'header.php'; include 'db.php'; 
+<?php 
+ob_start();    
+session_start();
+include 'db.php';
+include 'header.php'; 
+ 
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: index.php");
