@@ -5,6 +5,16 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 ob_start(); 
 
+// --- PERMISSIONS FIX: Ensure upload directory exists and is writable ---
+$upload_dir = 'upload';
+if (!is_dir($upload_dir)) {
+    mkdir($upload_dir, 0777, true);
+}
+// If the folder exists but isn't writable, try to fix it
+if (!is_writable($upload_dir)) {
+    chmod($upload_dir, 0777);
+}
+
 $dbfile = "roommate.db";
 try {
     $pdo = new PDO("sqlite:$dbfile");
@@ -51,7 +61,7 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS reports (
     UNIQUE(room_id, user_id)
 )");
 
-// --- LOGIN LOGIC (ADDED & FIXED) ---
+// --- LOGIN LOGIC ---
 if (isset($_POST['login'])) {
     $username = trim($_POST['username']);
     $password = $_POST['password'];
@@ -63,8 +73,6 @@ if (isset($_POST['login'])) {
     if ($user && password_verify($password, $user['password'])) {
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['username'] = $user['username'];
-        
-        // Save session before redirect
         session_write_close();
         header("Location: index.php");
         exit;
@@ -74,7 +82,7 @@ if (isset($_POST['login'])) {
     }
 }
 
-// --- REGISTER LOGIC (FIXED REDIRECT) ---
+// --- REGISTER LOGIC ---
 if (isset($_POST['register'])) {
     $surname = trim($_POST['surname']);
     $lastname = trim($_POST['lastname']);
@@ -114,7 +122,7 @@ if (isset($_GET['logout'])) {
     exit;
 }
 
-// --- LIST ROOMS (UNCHANGED) ---
+// --- LIST ROOMS ---
 if (isset($_GET['action']) && $_GET['action'] === 'list') {
     $sql = "SELECT r.*, u.username FROM rooms r LEFT JOIN users u ON r.user_id = u.id WHERE 1=1";
     $params = [];
@@ -174,7 +182,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'list') {
     exit;
 }
 
-// --- POST ROOM ---
+// --- POST ROOM (FIXED UPLOAD LOGIC) ---
 if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
     $title = trim($_POST['title']);
     $desc = trim($_POST['desc']);
@@ -183,16 +191,23 @@ if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
     $gender = $_POST['gender'];
     $wa = trim($_POST['wa']);
 
-    $ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
-    $filename = "upload/room_" . uniqid() . ".$ext";
+    // Check if file was uploaded without errors
+    if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
+        $ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
+        $filename = "upload/room_" . uniqid() . ".$ext";
 
-    if (move_uploaded_file($_FILES['photo']['tmp_name'], $filename)) {
-        $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$_SESSION['user_id'], $title, $desc, $price, $location, $gender, $wa, $filename]);
-        header("Location: index.php");
+        if (move_uploaded_file($_FILES['photo']['tmp_name'], $filename)) {
+            $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) 
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$_SESSION['user_id'], $title, $desc, $price, $location, $gender, $wa, $filename]);
+            header("Location: index.php");
+            exit;
+        } else {
+            die("Error: Failed to move file to $filename. Check folder permissions.");
+        }
+    } else {
+        die("Error: File upload failed with error code " . $_FILES['photo']['error']);
     }
-    exit;
 }
 
 function sendVerificationEmail($email, $code) {
