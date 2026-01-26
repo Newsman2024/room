@@ -1,33 +1,29 @@
 <?php
-/**
- * RoomMate Lagos - Database & Logic Handler
- * GitHub Ready Version
- */
-
+// 1. SESSION & BUFFERING
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 ob_start(); 
 
-// --- 1. CONFIGURATION & PERMISSIONS ---
+// 2. CONFIGURATION
 $upload_dir = 'upload';
 $dbfile = "roommate.db";
 
-// Silently try to create the upload folder if it doesn't exist
+// Ensure upload directory exists safely
 if (!is_dir($upload_dir)) {
     @mkdir($upload_dir, 0755, true);
 }
 
-// --- 2. DATABASE CONNECTION ---
+// 3. DATABASE CONNECTION
 try {
     $pdo = new PDO("sqlite:$dbfile");
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $pdo->exec("PRAGMA foreign_keys = ON;"); // Enables relational integrity
+    $pdo->exec("PRAGMA foreign_keys = ON;");
 } catch (PDOException $e) {
-    die("Database Error: Make sure the folder is writable. Error: " . $e->getMessage());
+    die("Critical Error: Database connection failed. Check folder permissions.");
 }
 
-// --- 3. TABLE SCHEMA ---
+// 4. DATABASE TABLES SETUP
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -57,7 +53,7 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS rooms (
     FOREIGN KEY (user_id) REFERENCES users(id)
 )");
 
-// --- 4. LOGIN LOGIC ---
+// 5. LOGIN LOGIC
 if (isset($_POST['login'])) {
     $username = trim($_POST['username']);
     $password = $_POST['password'];
@@ -73,12 +69,12 @@ if (isset($_POST['login'])) {
         header("Location: index.php");
         exit;
     } else {
-        echo "<script>alert('Invalid login credentials'); window.location.href='index.php';</script>";
+        echo "<script>alert('Invalid username or password!'); window.location.href='index.php';</script>";
         exit;
     }
 }
 
-// --- 5. REGISTRATION LOGIC ---
+// 6. REGISTRATION LOGIC
 if (isset($_POST['register'])) {
     $surname = trim($_POST['surname']);
     $lastname = trim($_POST['lastname']);
@@ -89,25 +85,28 @@ if (isset($_POST['register'])) {
     $code = sprintf("%06d", mt_rand(0, 999999));
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO users (surname, lastname, username, email, phone, password, verification_code) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO users (surname, lastname, username, email, phone, password, verification_code) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([$surname, $lastname, $username, $email, $phone, $password, $code]);
         
         $_SESSION['user_id'] = $pdo->lastInsertId();
         $_SESSION['username'] = $username;
         
-        @sendVerificationEmail($email, $code);
+        if (function_exists('sendVerificationEmail')) {
+            @sendVerificationEmail($email, $code);
+        }
         
         session_write_close();
         header("Location: verify.php");
         exit;
     } catch (PDOException $e) {
-        $msg = (strpos($e->getMessage(), 'UNIQUE') !== false) ? "Username or Email already exists." : "Registration failed.";
+        $msg = (strpos($e->getMessage(), 'UNIQUE') !== false) ? "Username/Email already taken!" : "Registration Error";
         echo "<script>alert('$msg'); window.location.href='index.php';</script>";
         exit;
     }
 }
 
-// --- 6. ROOM POSTING (WITH PERMISSION CHECK) ---
+// 7. ROOM POSTING (FIXED PERMISSIONS & FILENAME)
 if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
     $title = trim($_POST['title']);
     $desc = trim($_POST['desc']);
@@ -121,33 +120,39 @@ if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
         $allowed = ['jpg', 'jpeg', 'png', 'webp'];
         
         if (in_array($ext, $allowed)) {
+            // Generate a secure, unique filename
             $filename = $upload_dir . "/room_" . bin2hex(random_bytes(8)) . ".$ext";
 
             if (move_uploaded_file($_FILES['photo']['tmp_name'], $filename)) {
-                $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) 
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
                 $stmt->execute([$_SESSION['user_id'], $title, $desc, $price, $location, $gender, $wa, $filename]);
                 header("Location: index.php");
                 exit;
             } else {
-                die("Error: Folder permission denied. Run 'chmod 775 upload' on your server.");
+                die("Upload Error: Failed to save file to disk. Check folder permissions.");
             }
         } else {
-            die("Error: Invalid file type. Use JPG or PNG.");
+            die("Error: Invalid file type.");
         }
     }
 }
 
-// --- 7. HELPER FUNCTIONS ---
-function sendVerificationEmail($email, $code) {
-    $subject = "Verify RoomMate Lagos";
-    $message = "Your code: $code";
-    $headers = "From: no-reply@roommatelagos.com\r\n";
-    @mail($email, $subject, $message, $headers);
-}
-
+// 8. LOGOUT
 if (isset($_GET['logout'])) {
     session_destroy();
     header("Location: index.php");
     exit;
 }
+
+// 9. HELPER FUNCTIONS (WRAPPED TO PREVENT FATAL ERRORS)
+if (!function_exists('sendVerificationEmail')) {
+    function sendVerificationEmail($email, $code) {
+        $subject = "Verify your RoomMate Lagos account";
+        $message = "Your verification code is: <b>$code</b>";
+        $headers = "From: no-reply@roommatelagos.com\r\nContent-Type: text/html\r\n";
+        @mail($email, $subject, $message, $headers);
+    }
+}
 ?>
+
