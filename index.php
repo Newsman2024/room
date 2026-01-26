@@ -4,7 +4,7 @@ include 'db.php';
 include 'header.php'; 
  
 ?>
-
+<?php include 'db.php'; ?>
 <header class="bg-green-700 text-white p-8 text-center">
   <h1 class="text-4xl font-bold">RoomMate Lagos</h1>
   <p class="text-xl mt-3">Find roommates • Share rent • Lagos only</p>
