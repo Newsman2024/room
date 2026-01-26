@@ -5,14 +5,11 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 ob_start(); 
 
-// --- PERMISSIONS FIX: Ensure upload directory exists and is writable ---
+// --- UPLOAD DIRECTORY SETUP ---
 $upload_dir = 'upload';
 if (!is_dir($upload_dir)) {
-    mkdir($upload_dir, 0777, true);
-}
-// If the folder exists but isn't writable, try to fix it
-if (!is_writable($upload_dir)) {
-    chmod($upload_dir, 0777);
+    // Attempt to create, but don't die if it fails here
+    @mkdir($upload_dir, 0755, true);
 }
 
 $dbfile = "roommate.db";
@@ -23,7 +20,7 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// 2. Ensure Tables and Columns exist
+// 2. Ensure Tables exist
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -53,23 +50,13 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS rooms (
     FOREIGN KEY (user_id) REFERENCES users(id)
 )");
 
-$pdo->exec("CREATE TABLE IF NOT EXISTS reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    room_id INTEGER,
-    user_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(room_id, user_id)
-)");
-
-// --- LOGIN LOGIC ---
+// --- LOGIN / REGISTER / LOGOUT LOGIC (Unchanged) ---
 if (isset($_POST['login'])) {
     $username = trim($_POST['username']);
     $password = $_POST['password'];
-
     $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
     $stmt->execute([$username]);
     $user = $stmt->fetch();
-
     if ($user && password_verify($password, $user['password'])) {
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['username'] = $user['username'];
@@ -82,7 +69,6 @@ if (isset($_POST['login'])) {
     }
 }
 
-// --- REGISTER LOGIC ---
 if (isset($_POST['register'])) {
     $surname = trim($_POST['surname']);
     $lastname = trim($_POST['lastname']);
@@ -91,31 +77,22 @@ if (isset($_POST['register'])) {
     $phone = trim($_POST['phone']);
     $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
     $code = sprintf("%06d", mt_rand(0, 999999));
-
     try {
-        $stmt = $pdo->prepare("INSERT INTO users (surname, lastname, username, email, phone, password, verification_code) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO users (surname, lastname, username, email, phone, password, verification_code) VALUES (?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([$surname, $lastname, $username, $email, $phone, $password, $code]);
-        
         $_SESSION['user_id'] = $pdo->lastInsertId();
         $_SESSION['username'] = $username;
-        
         @sendVerificationEmail($email, $code);
-        
         session_write_close();
         header("Location: verify.php");
         exit;
     } catch (PDOException $e) {
-        if (strpos($e->getMessage(), 'UNIQUE constraint failed') !== false) {
-            echo "<script>alert('Username or Email already taken!'); window.location.href='index.php';</script>";
-        } else {
-            echo "<script>alert('Database Error: " . addslashes($e->getMessage()) . "');</script>";
-        }
+        $msg = (strpos($e->getMessage(), 'UNIQUE constraint failed') !== false) ? 'Username or Email already taken!' : 'Database Error';
+        echo "<script>alert('$msg'); window.location.href='index.php';</script>";
         exit;
     }
 }
 
-// --- LOGOUT ---
 if (isset($_GET['logout'])) {
     session_destroy();
     header("Location: index.php");
@@ -126,19 +103,9 @@ if (isset($_GET['logout'])) {
 if (isset($_GET['action']) && $_GET['action'] === 'list') {
     $sql = "SELECT r.*, u.username FROM rooms r LEFT JOIN users u ON r.user_id = u.id WHERE 1=1";
     $params = [];
-
-    if (!empty($_GET['loc'])) {
-        $sql .= " AND r.location LIKE ?";
-        $params[] = '%' . $_GET['loc'] . '%';
-    }
-    if (!empty($_GET['maxprice'])) {
-        $sql .= " AND r.price <= ?";
-        $params[] = $_GET['maxprice'];
-    }
-    if (!empty($_GET['gender']) && $_GET['gender'] !== 'Any Gender') {
-        $sql .= " AND r.gender = ?";
-        $params[] = $_GET['gender'];
-    }
+    if (!empty($_GET['loc'])) { $sql .= " AND r.location LIKE ?"; $params[] = '%' . $_GET['loc'] . '%'; }
+    if (!empty($_GET['maxprice'])) { $sql .= " AND r.price <= ?"; $params[] = $_GET['maxprice']; }
+    if (!empty($_GET['gender']) && $_GET['gender'] !== 'Any Gender') { $sql .= " AND r.gender = ?"; $params[] = $_GET['gender']; }
 
     $sql .= " ORDER BY r.id DESC";
     $stmt = $pdo->prepare($sql);
@@ -148,18 +115,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'list') {
         $posted = new DateTime($r['created_at']);
         $now = new DateTime();
         $interval = $now->diff($posted);
-
-        if ($interval->days == 0) {
-            $timeago = $interval->h > 0 ? $interval->h . "h ago" : ($interval->i > 0 ? $interval->i . "min ago" : "Just now");
-        } elseif ($interval->days == 1) {
-            $timeago = "Yesterday";
-        } else {
-            $timeago = $interval->days . " days ago";
-        }
-
-        $status_badge = ($r['status'] === 'found')
-            ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full">Match Found</span>'
-            : '<span class="bg-yellow-100 text-yellow-800 text-xs font-bold px-3 py-1 rounded-full">Looking</span>';
+        $timeago = ($interval->days == 0) ? ($interval->h > 0 ? $interval->h."h ago" : "Just now") : ($interval->days == 1 ? "Yesterday" : $interval->days." days ago");
+        $status_badge = ($r['status'] === 'found') ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full">Match Found</span>' : '<span class="bg-yellow-100 text-yellow-800 text-xs font-bold px-3 py-1 rounded-full">Looking</span>';
 
         echo "<div class='bg-white rounded-3xl shadow-xl overflow-hidden mb-8'>
                 <img src='{$r['photo']}' class='w-full h-64 object-cover' onerror=\"this.src='upload/default.jpg'\">
@@ -182,7 +139,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'list') {
     exit;
 }
 
-// --- POST ROOM (FIXED UPLOAD LOGIC) ---
+// --- POST ROOM (IMPROVED ERROR HANDLING) ---
 if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
     $title = trim($_POST['title']);
     $desc = trim($_POST['desc']);
@@ -191,22 +148,28 @@ if (isset($_POST['post']) && isset($_SESSION['user_id'])) {
     $gender = $_POST['gender'];
     $wa = trim($_POST['wa']);
 
-    // Check if file was uploaded without errors
     if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
         $ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
-        $filename = "upload/room_" . uniqid() . ".$ext";
+        $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+        
+        if (!in_array($ext, $allowed)) {
+            die("Error: Invalid file type.");
+        }
+
+        $filename = $upload_dir . "/room_" . uniqid() . ".$ext";
 
         if (move_uploaded_file($_FILES['photo']['tmp_name'], $filename)) {
-            $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) 
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt = $pdo->prepare("INSERT INTO rooms (user_id, title, description, price, location, gender, whatsapp, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([$_SESSION['user_id'], $title, $desc, $price, $location, $gender, $wa, $filename]);
             header("Location: index.php");
             exit;
         } else {
-            die("Error: Failed to move file to $filename. Check folder permissions.");
+            // Check if folder is writable if move fails
+            $error = is_writable($upload_dir) ? "Internal move error." : "Folder '$upload_dir' is not writable. Please set permissions to 775 or 777 via FTP/SSH.";
+            die("Error: $error");
         }
     } else {
-        die("Error: File upload failed with error code " . $_FILES['photo']['error']);
+        die("Error: File upload failed with code " . ($_FILES['photo']['error'] ?? 'No file'));
     }
 }
 
